@@ -1,4 +1,4 @@
--- INSERT INTO 
+-- INSERT INTO  
 
 
 WITH
@@ -29,6 +29,8 @@ usage_data AS (
       OR LOWER(sku.description) LIKE "%memory optimized ram%"
       OR LOWER(sku.description) LIKE "%memory-optimized core%" 
       OR LOWER(sku.description) LIKE "%memory-optimized ram%" 
+      OR sku.description LIKE "%GPU%"
+      OR sku.description LIKE "%Local Storage%"
     )
     -- Filter out Sole Tenancy skus that do not represent billable compute instance usage
     AND NOT 
@@ -64,42 +66,16 @@ prices AS (
 sku_metadata AS (
   SELECT  
     sku_id,
-    -- parse sku_description to identify whether usage is CUD eligible, or if the 
-    -- line item is for a commitment charge
     CASE
-      WHEN lower(sku_description) LIKE "%commitment%" THEN "CUD Commitment"
-      WHEN
-      (
-        lower(sku_description) LIKE "%preemptible%"
-        OR lower(sku_description) LIKE "%micro%"
-        OR lower(sku_description) LIKE "%small%"
-        OR lower(sku_description) LIKE "%extended%"
-      ) THEN "Ineligible Usage"
-      WHEN 
-      (
-        (LOWER(sku_description) LIKE "%instance%" OR LOWER(sku_description) LIKE "% intel %") 
-        OR LOWER(sku_description) LIKE "%core%"
-        OR LOWER(sku_description) LIKE "%ram%"
-      ) THEN "Eligible Usage"
-      ELSE NULL
-      END
-    AS usage_type,
-    -- for VM skus and commitments, "seconds" unit uniquely identifies vCPU usage
-    -- and "byte-seconds" unit uniquely identifies RAM
-    CASE
-      WHEN lower(unit) LIKE "seconds" THEN "vcpu"
-      WHEN lower(unit) LIKE "byte-seconds" THEN "ram"
+      WHEN lower(unit) LIKE "seconds" AND lower(sku_description) LIKE "%core%" THEN "vcpu"
+      WHEN lower(unit) LIKE "seconds" AND lower(sku_description) LIKE "%gpu%" THEN "gpu"
+      WHEN lower(unit) LIKE "byte-seconds" AND lower(sku_description) LIKE "%ram%" THEN "ram"
+      WHEN lower(unit) LIKE "byte-seconds" AND (lower(sku_description) LIKE "%local%" AND  lower(sku_description) LIKE "%ssd%") THEN "ssd"
       ELSE NULL
     END
-    AS unit_type,
-    CASE
-      WHEN lower(unit) LIKE "seconds" THEN "Avg. Concurrent vCPU"
-      WHEN lower(unit) LIKE "byte-seconds" THEN "Avg. Concurrent RAM GB"
-      ELSE NULL
-    END
-    AS display_unit
+    AS unit_type
   FROM usage_data
-  GROUP BY 1,2,3,4
+  GROUP BY 1,2
   ORDER BY 1 ASc
 ),
 cud_coverage_data AS(
@@ -111,7 +87,6 @@ SELECT
   project_name,
   sku_id,
   sku_description,
-  unit,
   SUM(cud_usage_amount) AS CUD_Credit_Amount,
   SUM(resource_usage_amount) AS Resource_Usage_Amount,
   SUM(cud_credit) AS CUD_Credit,
@@ -131,7 +106,6 @@ FROM
       project_name,
       sku_id,
       sku_description,
-      unit,
       SUM(cud_usage_amount) AS CUD_Usage_Amount,
       SUM(resource_usage_amount) AS Resource_Usage_Amount,
       SUM(cud_credit) AS CUD_Credit,
@@ -147,7 +121,6 @@ FROM
         project_name,
         u.sku_id,
         u.sku_description,
-        display_unit AS unit,
         unit_price,
         IF (
           prices.unit_price = 0, 
@@ -156,9 +129,13 @@ FROM
             -- Divide by # seconds in a day to get to core*days == avg daily concurrent usage
             WHEN LOWER(unit_type) LIKE "vcpu" THEN -1*SUM(cred.amount)/prices.unit_price/ 86400
 
+            WHEN LOWER(unit_type) LIKE "gpu" THEN -1*SUM(cred.amount)/prices.unit_price/ 86400
+
             -- Divide by # seconds in a day and # bytes in a GB to get to 
             -- GB*days == avg daily concurrent RAM GB         
             WHEN LOWER(unit_type) = "ram" THEN -1*SUM(cred.amount)/prices.unit_price / (86400 * 1073741824)
+
+            WHEN LOWER(unit_type) = "ssd" THEN -1*SUM(cred.amount)/prices.unit_price / (86400 * 1073741824)
             ELSE NULL
           END
         )
@@ -169,9 +146,13 @@ FROM
           CASE
             -- Divide by # seconds in a day to get to core*days == avg daily concurrent usage
             WHEN LOWER(unit_type) LIKE "vcpu" THEN SUM(u.usage_amount)/ 86400
+
+            WHEN LOWER(unit_type) LIKE "gpu" THEN SUM(u.usage_amount)/ 86400
             -- Divide by # seconds in a day and # bytes in a GB to get to 
             -- GB*days == avg daily concurrent RAM GB         
             WHEN LOWER(unit_type) = "ram" THEN SUM(u.usage_amount) / (86400 * 1073741824)
+
+            WHEN LOWER(unit_type) = "ssd" THEN SUM(u.usage_amount) / (86400 * 1073741824)
             ELSE NULL
           END
         )
@@ -212,13 +193,18 @@ FROM
         AND u.usage_date = prices.usage_date
       -- filter down to just CUD Credits
       WHERE cred.name like "%Committed%"
-      GROUP BY 1,2,3,4,5,6,7,8,9,10
+      GROUP BY 1,2,3,4,5,6,7,8,9
     )
-    GROUP BY 1,2,3,4,5,6,7,8,9
+    GROUP BY 1,2,3,4,5,6,7,8
 )
-GROUP BY 1,2,3,4,5,6,7,8
+GROUP BY 1,2,3,4,5,6,7
+
 )
 
+-- 28111
+SELECT DISTINCT sku_description
+
+FROM(
 
 SELECT *,
 IF (
@@ -228,6 +214,6 @@ IF (
 )
 AS cud_coverage 
 FROM cud_coverage_data
-
+)
 
 

@@ -1,3 +1,6 @@
+-- INSERT INTO 
+
+
 WITH
 usage_data AS (
   SELECT
@@ -151,10 +154,11 @@ FROM
           0, 
           CASE
             -- Divide by # seconds in a day to get to core*days == avg daily concurrent usage
-            WHEN LOWER(unit_type) LIKE "vcpu" THEN -1*SUM(cred.amount)/prices.unit_price
+            WHEN LOWER(unit_type) LIKE "vcpu" THEN -1*SUM(cred.amount)/prices.unit_price/ 86400
+
             -- Divide by # seconds in a day and # bytes in a GB to get to 
             -- GB*days == avg daily concurrent RAM GB         
-            WHEN LOWER(unit_type) = "ram" THEN -1*SUM(cred.amount)/prices.unit_price 
+            WHEN LOWER(unit_type) = "ram" THEN -1*SUM(cred.amount)/prices.unit_price / (86400 * 1073741824)
             ELSE NULL
           END
         )
